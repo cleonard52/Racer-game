@@ -1,0 +1,482 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Neon Racer - Curved Roads</title>
+<style>
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: #151923;
+    color: white;
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+}
+
+h1 {
+    margin: 15px 0 8px;
+    color: #38f59b;
+    letter-spacing: 3px;
+}
+
+#hud {
+    width: min(400px, 100vw);
+    display: flex;
+    justify-content: space-around;
+    padding: 10px;
+    font-weight: bold;
+}
+
+#gameContainer {
+    position: relative;
+    width: min(400px, 100vw);
+}
+
+canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: #176b37;
+    border: 3px solid #687080;
+}
+
+#overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, .8);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 20px;
+}
+
+#overlay h2 {
+    font-size: 34px;
+    color: #38f59b;
+    margin-bottom: 10px;
+}
+
+button {
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    background: #38f59b;
+    color: #111;
+    font-size: 17px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+button:hover { background: #15d77c; }
+
+#controls {
+    display: flex;
+    justify-content: center;
+    gap: 45px;
+    margin: 12px 0;
+}
+
+.controlBtn {
+    width: 80px;
+    height: 55px;
+    font-size: 25px;
+    touch-action: none;
+    user-select: none;
+}
+
+p {
+    color: #c6ccda;
+    text-align: center;
+    padding: 0 10px;
+}
+</style>
+</head>
+<body>
+
+<h1>NEON RACER</h1>
+
+<div id="hud">
+    <span>🏁 Score: <span id="score">0</span></span>
+    <span>⚡ Speed: <span id="speed">0</span></span>
+</div>
+
+<div id="gameContainer">
+    <canvas id="game" width="400" height="600"></canvas>
+    <div id="overlay">
+        <h2 id="message">NEON RACER</h2>
+        <p id="instructions">
+            Dodge traffic on winding roads!
+            <br><br>
+            Use WASD or arrow keys to drive.
+        </p>
+        <button id="startBtn">START RACE</button>
+    </div>
+</div>
+
+<div id="controls">
+    <button class="controlBtn" id="leftBtn">◀</button>
+    <button class="controlBtn" id="rightBtn">▶</button>
+</div>
+
+<p>Arrow keys / WASD • Avoid traffic and follow the curves!</p>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const scoreDisplay = document.getElementById("score");
+const speedDisplay = document.getElementById("speed");
+const overlay = document.getElementById("overlay");
+const message = document.getElementById("message");
+const instructions = document.getElementById("instructions");
+const startBtn = document.getElementById("startBtn");
+
+const W = canvas.width;
+const H = canvas.height;
+
+const roadWidth = 270;
+const roadCenter = W / 2;
+const laneWidth = roadWidth / 3;
+
+let player, enemies, score, roadOffset, spawnTimer;
+let running = false;
+let animationId = null;
+let lastTime = 0;
+let distance = 0;
+let curveStrength = 0;
+let targetCurve = 0;
+let curveTimer = 0;
+let steering = 0;
+
+const keys = {
+    left: false,
+    right: false,
+    up: false,
+    down: false
+};
+
+// Road center at any vertical screen position.
+// The curve is generated from the distance travelled,
+// so road edges, lane markings and traffic align.
+function roadCurveAt(y) {
+    const horizon = distance * 0.0008;
+    const perspective = (H - y) / H;
+
+    return (
+        Math.sin(horizon + (H - y) * 0.003) * curveStrength * perspective +
+        Math.sin(horizon * 0.55 + (H - y) * 0.0015) * 18 * perspective
+    );
+}
+
+function roadX(y) {
+    return roadCenter + roadCurveAt(y);
+}
+
+function resetGame() {
+    player = {
+        x: roadCenter - 18,
+        y: H - 115,
+        width: 36,
+        height: 62,
+        color: "#38f59b"
+    };
+
+    enemies = [];
+    score = 0;
+    roadOffset = 0;
+    spawnTimer = 0;
+    distance = 0;
+    curveStrength = 0;
+    targetCurve = 0;
+    curveTimer = 0;
+    steering = 0;
+
+    keys.left = keys.right = keys.up = keys.down = false;
+
+    scoreDisplay.textContent = "0";
+    speedDisplay.textContent = "5";
+}
+
+function drawCar(x, y, width, height, color) {
+    ctx.fillStyle = "#111";
+    ctx.fillRect(x - 4, y + 10, 6, 15);
+    ctx.fillRect(x + width - 2, y + 10, 6, 15);
+    ctx.fillRect(x - 4, y + height - 25, 6, 15);
+    ctx.fillRect(x + width - 2, y + height - 25, 6, 15);
+
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, width, height);
+
+    ctx.fillStyle = "#a9e8ff";
+    ctx.fillRect(x + 5, y + 10, width - 10, 14);
+    ctx.fillRect(x + 5, y + height - 23, width - 10, 11);
+
+    ctx.fillStyle = "#fff5a0";
+    ctx.fillRect(x + 3, y + 2, 8, 4);
+    ctx.fillRect(x + width - 11, y + 2, 8, 4);
+
+    ctx.fillStyle = "#ff3333";
+    ctx.fillRect(x + 3, y + height - 5, 8, 4);
+    ctx.fillRect(x + width - 11, y + height - 5, 8, 4);
+}
+
+function drawRoad() {
+    // Grass background
+    ctx.fillStyle = "#176b37";
+    ctx.fillRect(0, 0, W, H);
+
+    // Decorative grass dashes
+    ctx.fillStyle = "#208446";
+    for (let y = -30; y < H; y += 65) {
+        const sy = ((y + roadOffset * 1.5) % (H + 65) + H + 65) % (H + 65);
+        ctx.fillRect(12, sy, 15, 3);
+        ctx.fillRect(W - 28, sy, 15, 3);
+    }
+
+    // Draw curved road surface as a polygon
+    ctx.beginPath();
+    for (let y = 0; y <= H; y += 5) {
+        const x = roadX(y) - roadWidth / 2;
+        if (y === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    for (let y = H; y >= 0; y -= 5) {
+        ctx.lineTo(roadX(y) + roadWidth / 2, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = "#343943";
+    ctx.fill();
+
+    // Road edges and red/white curbs
+    for (let y = 0; y < H; y += 18) {
+        const yy = (y + roadOffset * 1.4) % H;
+        const center = roadX(yy);
+        const stripe = Math.floor((y + roadOffset * 1.4) / 18) % 2 === 0;
+        ctx.fillStyle = stripe ? "#ff4545" : "#ffffff";
+        ctx.fillRect(center - roadWidth / 2 - 7, yy, 7, 18);
+        ctx.fillRect(center + roadWidth / 2, yy, 7, 18);
+    }
+
+    // Curved lane markings, drawn as short segments
+    ctx.fillStyle = "#f5f5f5";
+    for (let lane = 1; lane <= 2; lane++) {
+        for (let y = -80; y < H; y += 100) {
+            const yy = ((y + roadOffset * 1.6) % (H + 100) + H + 100) % (H + 100);
+            const x = roadX(yy) - roadWidth / 2 + lane * laneWidth;
+            ctx.fillRect(x - 2, yy, 4, 48);
+        }
+    }
+}
+
+function spawnEnemy() {
+    const lane = Math.floor(Math.random() * 3);
+    const carWidth = 36;
+    const carHeight = 62;
+    const y = -carHeight - 5;
+
+    const colors = [
+        "#ff4242", "#42a5ff", "#ffd447",
+        "#d66bff", "#ff8a3d"
+    ];
+
+    const center = roadX(y);
+    const leftEdge = center - roadWidth / 2;
+
+    enemies.push({
+        x: leftEdge + lane * laneWidth +
+           (laneWidth - carWidth) / 2,
+        y,
+        width: carWidth,
+        height: carHeight,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        speed: 2 + Math.random() * 2,
+        lane
+    });
+}
+
+function collides(a, b) {
+    return (
+        a.x + 5 < b.x + b.width - 5 &&
+        a.x + a.width - 5 > b.x + 5 &&
+        a.y + 7 < b.y + b.height - 7 &&
+        a.y + a.height - 7 > b.y + 7
+    );
+}
+
+function update(delta) {
+    const dt = Math.min(delta / 16.67, 2);
+    const roadSpeed = 5 + Math.min(score / 250, 5);
+    const moveSpeed = 5.5 * dt;
+
+    distance += roadSpeed * dt;
+    roadOffset = (roadOffset + roadSpeed * dt) % H;
+
+    // Gradually change the road's curve direction and strength.
+    curveTimer -= delta;
+    if (curveTimer <= 0) {
+        targetCurve = (Math.random() * 2 - 1) * 95;
+        curveTimer = 1800 + Math.random() * 2400;
+    }
+
+    curveStrength += (targetCurve - curveStrength) * 0.012 * dt;
+
+    // Player steering
+    if (keys.left) player.x -= moveSpeed;
+    if (keys.right) player.x += moveSpeed;
+    if (keys.up) player.y -= moveSpeed;
+    if (keys.down) player.y += moveSpeed;
+
+    player.y = Math.max(10, Math.min(H - player.height - 10, player.y));
+
+    // Keep the player within the curved road at their current position.
+    const center = roadX(player.y + player.height / 2);
+    const leftEdge = center - roadWidth / 2 + 12;
+    const rightEdge = center + roadWidth / 2 - player.width - 12;
+
+    player.x = Math.max(leftEdge, Math.min(rightEdge, player.x));
+
+    // Traffic spawning
+    spawnTimer += delta;
+    const spawnInterval = Math.max(420, 1050 - score * 2);
+
+    if (spawnTimer >= spawnInterval) {
+        spawnEnemy();
+        spawnTimer = 0;
+    }
+
+    // Cars move down the screen and follow the road bends.
+    for (const enemy of enemies) {
+        enemy.y += (roadSpeed + enemy.speed) * dt;
+
+        const enemyCenter = roadX(enemy.y);
+        const roadLeft = enemyCenter - roadWidth / 2;
+        enemy.x = roadLeft + enemy.lane * laneWidth +
+                  (laneWidth - enemy.width) / 2;
+
+        if (collides(player, enemy)) {
+            endGame();
+            return;
+        }
+    }
+
+    const passed = enemies.filter(enemy => enemy.y > H).length;
+    enemies = enemies.filter(enemy => enemy.y <= H);
+
+    score += passed * 10 + delta * 0.006;
+    scoreDisplay.textContent = Math.floor(score);
+    speedDisplay.textContent = Math.floor(roadSpeed);
+}
+
+function draw() {
+    drawRoad();
+
+    for (const enemy of enemies) {
+        drawCar(enemy.x, enemy.y, enemy.width, enemy.height, enemy.color);
+    }
+
+    drawCar(player.x, player.y, player.width, player.height, player.color);
+}
+
+function gameLoop(timestamp) {
+    if (!running) return;
+
+    const delta = lastTime
+        ? Math.min(timestamp - lastTime, 50)
+        : 16.67;
+
+    lastTime = timestamp;
+    update(delta);
+
+    if (running) {
+        draw();
+        animationId = requestAnimationFrame(gameLoop);
+    }
+}
+
+function startGame() {
+    if (animationId !== null) cancelAnimationFrame(animationId);
+
+    resetGame();
+    running = true;
+    lastTime = 0;
+
+    message.textContent = "NEON RACER";
+    startBtn.textContent = "START RACE";
+    overlay.style.display = "none";
+
+    animationId = requestAnimationFrame(gameLoop);
+}
+
+function endGame() {
+    running = false;
+
+    if (animationId !== null) cancelAnimationFrame(animationId);
+    animationId = null;
+
+    message.textContent = "CRASH!";
+    instructions.innerHTML =
+        "Final Score: " + Math.floor(score) +
+        "<br><br>Try again and beat your record!";
+
+    startBtn.textContent = "RACE AGAIN";
+    overlay.style.display = "flex";
+}
+
+startBtn.addEventListener("click", startGame);
+
+document.addEventListener("keydown", event => {
+    const key = event.key.toLowerCase();
+
+    if (["arrowleft", "arrowright", "arrowup", "arrowdown", " "].includes(key)) {
+        event.preventDefault();
+    }
+
+    if (key === "arrowleft" || key === "a") keys.left = true;
+    if (key === "arrowright" || key === "d") keys.right = true;
+    if (key === "arrowup" || key === "w") keys.up = true;
+    if (key === "arrowdown" || key === "s") keys.down = true;
+});
+
+document.addEventListener("keyup", event => {
+    const key = event.key.toLowerCase();
+
+    if (key === "arrowleft" || key === "a") keys.left = false;
+    if (key === "arrowright" || key === "d") keys.right = false;
+    if (key === "arrowup" || key === "w") keys.up = false;
+    if (key === "arrowdown" || key === "s") keys.down = false;
+});
+
+function bindButton(id, key) {
+    const button = document.getElementById(id);
+
+    button.addEventListener("pointerdown", event => {
+        event.preventDefault();
+        keys[key] = true;
+        button.setPointerCapture(event.pointerId);
+    });
+
+    function release() {
+        keys[key] = false;
+    }
+
+    button.addEventListener("pointerup", release);
+    button.addEventListener("pointercancel", release);
+    button.addEventListener("lostpointercapture", release);
+}
+
+bindButton("leftBtn", "left");
+bindButton("rightBtn", "right");
+
+resetGame();
+draw();
+</script>
+</body>
+</html>
